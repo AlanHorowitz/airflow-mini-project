@@ -11,12 +11,37 @@ work_dir = os.getcwd()
 temp_dir = '/tmp/data'
 
 default_args = {
-    'start_date': datetime(2021, 6, 25)
+    'start_date': datetime(2021, 6, 25),
+    'retries': 2,
+    'retry_delay': timedelta(minutes=5),
 }
 
 
-def create_report(report_date):
-    pass
+def create_report(report_date, in_out_dir):
+    df_cols = ['Datetime','Open','High','Low','Close','Adj Close','Volume']
+    tickers = ['AAPL', 'TSLA']
+    output_dfs = []
+    for ticker in tickers:
+        in_filename = f'{ticker}-{report_date}.csv'
+        out_filename = f'market-vol-report-{report_date}.csv'
+        df = pd.read_csv(os.path.join(in_out_dir, in_filename), header=None, names=df_cols)
+
+        df['Swing'] = abs(df['High'] - df['Low'])
+        max_swing_df = df[df['Swing'] == max(df['Swing'])].copy()
+        max_swing_df['Type'] = 'Max Swing'
+        max_swing_df['Ticker'] = ticker
+
+        max_volume_df = df[df['Volume'] == max(df['Volume'])].copy()
+        max_volume_df['Type'] = 'Max Volume'
+        max_volume_df['Ticker'] = ticker
+
+        output_dfs.extend([max_swing_df, max_volume_df])
+
+    report = pd.concat(output_dfs)
+
+    report["Time"] = report['Datetime'].str.slice(start=11)
+    report = report.drop(columns=['Datetime', 'Open', 'Close', 'Adj Close']).set_index(['Type', 'Ticker', 'Time'])
+    report.to_csv(os.path.join(in_out_dir, out_filename), header=True)
 
 
 def yahoo_finance_data(symbol, report_date, out_dir):
@@ -46,15 +71,18 @@ with DAG('market_vol',
                         op_kwargs={'symbol': 'TSLA', 'report_date': '{{ ds }}', 'out_dir': temp_dir})
 
     t3 = BashOperator(task_id='move_AAPL',
-                      bash_command='mv {{params.temp_dir}}/{{ ds }}/AAPL.csv {{params.work_dir}}',
+                      bash_command='mv {{params.temp_dir}}/{{ ds }}/AAPL.csv {{params.work_dir}}/AAPL-{{ ds }}.csv',
                       params={'temp_dir': temp_dir, 'work_dir': work_dir})
 
     t4 = BashOperator(task_id='move_TSLA',
-                      bash_command='mv {{params.temp_dir}}/{{ ds }}/TSLA.csv {{params.work_dir}}',
+                      bash_command='mv {{params.temp_dir}}/{{ ds }}/TSLA.csv {{params.work_dir}}/TSLA-{{ ds }}.csv',
                       params={'temp_dir': temp_dir, 'work_dir': work_dir})
 
-    t5 = PythonOperator(task_id='daily_report',
-                        python_callable=create_report)
-                        op_kwargs={'report_date': '{{ ds }}'}
+    t5 = PythonOperator(task_id='create_report',
+                        python_callable=create_report,
+                        op_kwargs={'report_date': '{{ ds }}', 'in_out_dir': work_dir})
 
-    t0 >> t1 >> t2 >> t3 >> t4 >> t5
+    t0 >> [t1, t2]
+    t1 >> t3
+    t2 >> t4
+    [t3, t4] >> t5
