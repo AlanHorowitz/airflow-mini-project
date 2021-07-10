@@ -11,13 +11,14 @@ work_dir = os.getcwd()
 temp_dir = '/tmp/data'
 
 default_args = {
-    'start_date': datetime(2021, 6, 25),
+    'start_date': datetime(2021, 7, 6),
     'retries': 2,
     'retry_delay': timedelta(minutes=5),
 }
 
 
 def create_report(report_date, in_out_dir):
+    """ Custom report showing data for the minutes with the highest volume and volatility."""
     df_cols = ['Datetime','Open','High','Low','Close','Adj Close','Volume']
     tickers = ['AAPL', 'TSLA']
     output_dfs = []
@@ -35,10 +36,11 @@ def create_report(report_date, in_out_dir):
         max_volume_df['Type'] = 'Max Volume'
         max_volume_df['Ticker'] = ticker
 
+        # Add dataframes for both metrics per ticker
         output_dfs.extend([max_swing_df, max_volume_df])
 
+    # Concatenate report pieces and format
     report = pd.concat(output_dfs)
-
     report["Time"] = report['Datetime'].str.slice(start=11)
     report = report.drop(columns=['Datetime', 'Open', 'Close', 'Adj Close']).set_index(['Type', 'Ticker', 'Time'])
     report.to_csv(os.path.join(in_out_dir, out_filename), header=True)
@@ -55,7 +57,7 @@ def yahoo_finance_data(symbol, report_date, out_dir):
 with DAG('market_vol',
          default_args=default_args,
          description='A simple DAG',
-         schedule_interval="0 18 * * 1-5"
+         schedule_interval="0 22 * * 1-5"
          ) as dag:
 
     t0 = BashOperator(task_id='create_temp_dir',
@@ -82,6 +84,7 @@ with DAG('market_vol',
                         python_callable=create_report,
                         op_kwargs={'report_date': '{{ ds }}', 'in_out_dir': work_dir})
 
+    # The download and move tasks can run concurrently for a ticker symbol
     t0 >> [t1, t2]
     t1 >> t3
     t2 >> t4
